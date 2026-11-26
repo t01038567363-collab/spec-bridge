@@ -3,7 +3,6 @@
 const MAX_FILE_BYTES = 30 * 1024 * 1024;
 const MAX_PDF_PAGES = 100;
 const MAX_TEXT_CHARS = 2000000;
-const MAX_REQS = 600;
 const TEXT_EXTS = ['txt', 'json', 'csv', 'md', 'log'];
 const STORE_KEY = 'specBridge.v4';
 const ROLES = {
@@ -17,7 +16,7 @@ const curCrits = () => (state.results ? state.results.crits : critsOf(state.role
 
 const state = {
   screen: 1, role: 'company', mode: 'defense', org: '', project: '', notes: '',
-  files: [], results: null, inspectedAt: null, inspecting: false,
+  files: [], results: null, inspectedAt: null, inspecting: false, user: null,
   domainFilter: 'ALL', statusFilter: 'ALL', relevance: 0.4,
 };
 
@@ -81,16 +80,6 @@ function renderRoles() {
 }
 
 /* ---------- step 2: files ---------- */
-const SENSITIVE = [
-  [/\d{6}\s?-\s?[1-4]\d{6}/, '주민등록번호 형식'],
-  [/01[016789][-\s]?\d{3,4}[-\s]?\d{4}/, '휴대전화번호 형식'],
-  [/[\w.+-]+@[\w-]+\.[\w.-]+/, '이메일 주소'],
-  [/(군사\s?기밀|군사비밀|대외비|Ⅱ급\s?비밀|II급\s?비밀|Ⅲ급\s?비밀|III급\s?비밀|CONFIDENTIAL|SECRET|TOP SECRET)/i, '비밀·대외비 표시'],
-  [/(비밀번호|패스워드|password|api[_-]?key|secret[_-]?key)\s*[:=]/i, '비밀번호·키 표기'],
-  [/\b\d{3}-\d{2}-\d{5}\b/, '사업자등록번호 형식'],
-];
-function detectSensitive(text) { return SENSITIVE.filter(([re]) => re.test(text)).map(([, label]) => label); }
-
 async function addFiles(list, kind) {
   const files = Array.from(list);
   let ok = 0;
@@ -114,7 +103,7 @@ async function addFiles(list, kind) {
       }
       if (rec.status === 'ok') {
         const hits = detectSensitive(rec.text);
-        if (hits.length) { rec.status = 'warn'; rec.note += ` · ⚠ 민감정보 의심: ${hits.join(', ')} — 해당 자료를 올리지 않는 것을 권장합니다(분석은 브라우저 안에서만 수행).`; toast(`민감정보 의심 항목 발견: ${hits.join(', ')}`, 'warn'); }
+        if (hits.length) { rec.status = 'warn'; rec.note += ` · ⚠ 민감정보 의심: ${hits.join(', ')} — 해당 자료를 올리지 않는 것을 권장합니다(업로드한 원문은 서버에 저장하지 않으며 비교 후 폐기, 결과 문장만 기록에 저장).`; toast(`민감정보 의심 항목 발견: ${hits.join(', ')}`, 'warn'); }
         ok++;
       }
     } catch (err) {
@@ -206,138 +195,18 @@ const SAMPLE_COMPANY = `[신뢰성 분석서]
 협력업체 평가 결과를 기록하고 5년간 보존한다.`;
 
 /* ---------- 텍스트 분석 ---------- */
-const MARK = /(해야|하여야|한다|할 것|하도록|이어야|되어야|이상|이하|이내|초과|미만|shall|must|required|minimum|maximum|at least|at most|±|\+\/-)/i;
-const MARK_STRIP = /(해야|하여야|한다|할 것|하도록|이어야|되어야|이상|이하|이내|초과|미만|shall|must|required|minimum|maximum|at least|at most)/gi;
-const STOP_EN = new Set(['the', 'and', 'for', 'with', 'per', 'that', 'this', 'are', 'all', 'any', 'not', 'shall', 'must', 'will', 'from', 'have', 'has', 'been', 'its', 'than', 'least', 'most']);
-const STOP_KO = new Set(['여야', '있는', '있다', '대한', '대해', '에서', '으로', '또는', '하는', '하며', '있음', '않는', '경우', '이며', '이다', '수행', '제출', '만족']);
-const UNIT = '(?:mm|μm|um|kg|khz|mhz|ghz|hz|vdc|vac|v|ma|a|℃|°c|%|시간|hours?|hrs?|h|db|mpa|kpa|ms|g)';
-const UNIT_NORM = { vdc: 'v', vac: 'v', '°c': 'c', '℃': 'c', 시간: 'h', hour: 'h', hours: 'h', hr: 'h', hrs: 'h', μm: 'um' };
-const VAL_RE = new RegExp(`(±|\\+\\/-|\\+-)?\\s*([+-]?\\d[\\d,]*(?:\\.\\d+)?)\\s*(${UNIT})(?![a-z])\\s*(이상|이하|이내|초과|미만|or more|or less|min(?:imum)?|max(?:imum)?)?`, 'gi');
-const ID_RE = /(MIL-STD-\d+[A-Z]?|MIL-HDBK-\d+[A-Z]?|KDS[-\s]?[A-Z0-9][A-Z0-9-]*|AS\s?9100[A-Z]?|ISO\s?\d{3,5}|ITAR|\bEAR\b|ECP|FMEA|FRACAS|DMSMS|RTM|ICD|CSCI|KQP|\bEMC\b|\bEMI\b|\bESS\b|MTBF|\bATP\b|\bQTR\b)/gi;
-
-const normId = (s) => s.toUpperCase().replace(/\s+/g, '');
-
-function splitSentences(text) {
-  const lines = text.replace(/\r/g, '').split('\n');
-  const merged = [];
-  for (const raw of lines) {
-    const ln = raw.trim();
-    if (!ln) { merged.push(''); continue; }
-    const prev = merged[merged.length - 1];
-    const bullet = /^(\d+(\.\d+)*[.)]?\s|[-•·○ㅇ□▶]|\(\d+\)|\[)/.test(ln);
-    if (prev && !bullet && !/[.다:;。]$/.test(prev)) merged[merged.length - 1] = `${prev} ${ln}`;
-    else merged.push(ln);
-  }
-  const out = [];
-  for (const m of merged) {
-    if (!m) continue;
-    m.split(/(?<=[.!?。])\s+(?=[A-Z가-힣\d])/).forEach((s) => { const t = s.trim(); if (t.length >= 6) out.push(t); });
-  }
-  return out;
-}
-
-function termsOf(s) {
-  const t = new Set();
-  const low = s.toLowerCase().replace(MARK_STRIP, ' ');
-  (low.match(/[a-z][a-z0-9-]{2,}/g) || []).forEach((w) => { if (!STOP_EN.has(w)) t.add(w); });
-  (low.match(/[가-힣]{2,}/g) || []).forEach((run) => {
-    for (let i = 0; i < run.length - 1; i++) { const bg = run.slice(i, i + 2); if (!STOP_KO.has(bg)) t.add(bg); }
+/* ---------- 서버 API & 검사 (판정은 서버의 engine.js 가 수행) ---------- */
+async function api(method, url, body) {
+  const res = await fetch(url, {
+    method, credentials: 'same-origin',
+    headers: { 'X-Requested-With': 'spec-bridge', ...(body ? { 'Content-Type': 'application/json' } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
   });
-  return t;
-}
-
-function parseValues(s) {
-  const vals = [];
-  VAL_RE.lastIndex = 0;
-  let m;
-  while ((m = VAL_RE.exec(s))) {
-    let unit = m[3].toLowerCase();
-    unit = UNIT_NORM[unit] || unit;
-    const num = parseFloat(m[2].replace(/,/g, ''));
-    if (Number.isNaN(num)) continue;
-    const before = s.slice(Math.max(0, m.index - 14), m.index).toLowerCase();
-    const after = (m[4] || '').toLowerCase();
-    let op = 'eq';
-    if (m[1]) op = 'tol';
-    else if (/이상|or more|min/.test(after) || /(at least|minimum|min\.?|최소|≥|>=)\s*$/.test(before)) op = 'ge';
-    else if (/이하|이내|or less|max/.test(after) || /(at most|maximum|max\.?|최대|≤|<=)\s*$/.test(before)) op = 'le';
-    else if (/초과/.test(after)) op = 'gt';
-    else if (/미만/.test(after)) op = 'lt';
-    vals.push({ num, unit, op, raw: m[0].trim(), signed: /^[+-]/.test(m[2]) });
-  }
-  return vals;
-}
-
-function satisfied(spec, c) {
-  const v = spec.op === 'tol' ? Math.abs(c.num) : c.num;
-  switch (spec.op) {
-    case 'ge': return v >= spec.num;
-    case 'gt': return v > spec.num;
-    case 'le': return v <= spec.num;
-    case 'lt': return v < spec.num;
-    case 'tol': return v <= Math.abs(spec.num);
-    default: return v === spec.num;
-  }
-}
-const OP_TXT = { ge: '이상', gt: '초과', le: '이하', lt: '미만', tol: '(허용오차)', eq: '(동일)' };
-
-/* ---------- 요구사항 추출 & 대조 ---------- */
-function extractRequirements(specFiles) {
-  const seen = new Set();
-  const reqs = [];
-  for (const f of specFiles) {
-    for (const s of splitSentences(f.text)) {
-      if (!(MARK.test(s) || parseValues(s).length)) continue;
-      const key = s.toLowerCase().replace(/\s+/g, ' ');
-      if (seen.has(key)) continue;
-      seen.add(key);
-      reqs.push({ text: s, file: f.name, terms: termsOf(s), values: parseValues(s), ids: [...new Set((s.match(ID_RE) || []).map(normId))] });
-      if (reqs.length >= MAX_REQS) return reqs;
-    }
-  }
-  return reqs;
-}
-
-function classify(req, crits) {
-  let best = null, bestN = 0;
-  for (const c of crits) {
-    const n = c.kw.filter((kw) => kwRegex(kw).test(req.text)).length;
-    if (n > bestN) { best = c; bestN = n; }
-  }
-  return best ? best.id : null;
-}
-function kwRegex(kw) {
-  const e = kw.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  return /^[a-z0-9 \-&/.]+$/i.test(kw) ? new RegExp(`(?<![a-z0-9])${e}(?![a-z])`, 'i') : new RegExp(e, 'i');
-}
-
-function judge(req, index, threshold) {
-  const scored = [];
-  for (const s of index) {
-    let hit = 0;
-    for (const t of req.terms) if (s.terms.has(t)) hit++;
-    const rel = req.terms.size ? hit / req.terms.size : 0;
-    if (rel > 0) scored.push({ s, rel });
-  }
-  scored.sort((a, b) => b.rel - a.rel);
-  const top = scored.slice(0, 3);
-  const best = top[0];
-  const base = { text: req.text, file: req.file, values: req.values, ids: req.ids };
-  if (!best || best.rel < threshold) {
-    return { ...base, status: 'MISSING', relevance: best ? best.rel : 0, evidence: best ? [{ text: best.s.text, file: best.s.file }] : [], issues: ['연관된 기업 자료 문장을 찾지 못했습니다.'], quantitative: false };
-  }
-  const near = top.filter((t) => t.rel >= threshold).map((t) => t.s);
-  const nearText = near.map((s) => s.text).join(' ');
-  const issues = [];
-  const nearIds = new Set((nearText.match(ID_RE) || []).map(normId));
-  for (const id of req.ids) if (!nearIds.has(id)) issues.push(`규격이 요구한 표준/문서 "${id}"가 관련 문장에서 확인되지 않습니다.`);
-  const compVals = near.flatMap((s) => s.values);
-  for (const v of req.values) {
-    const same = compVals.filter((c) => c.unit === v.unit);
-    if (!same.length) { issues.push(`규격 수치 ${v.raw} ${OP_TXT[v.op]} 에 대응하는 ${v.unit} 단위 수치가 기업 자료에 없습니다.`); continue; }
-    if (!same.some((c) => satisfied(v, c))) issues.push(`규격 ${v.raw} ${OP_TXT[v.op]} 미충족 — 기업 자료 값: ${[...new Set(same.map((c) => c.raw))].join(', ')}`);
-  }
-  return { ...base, status: issues.length ? 'REVISION' : 'MET', relevance: best.rel, evidence: near.map((s) => ({ text: s.text, file: s.file })), issues, quantitative: req.ids.length + req.values.length > 0 };
+  let data = {};
+  try { data = await res.json(); } catch (_) { /* empty */ }
+  if (res.status === 401 && state.user) { state.user = null; showAuth(); }
+  if (!res.ok) throw new Error(data.error || `서버 오류(${res.status})`);
+  return data;
 }
 
 async function runInspection() {
@@ -346,44 +215,49 @@ async function runInspection() {
   const compFiles = state.files.filter((f) => f.kind === 'company' && f.text.trim());
   if (!specFiles.length || !compFiles.length) { toast('국방 규격서와 기업 자료(텍스트 추출 가능)가 모두 필요합니다.', 'warn'); return; }
   state.inspecting = true; $('runBtn').disabled = true;
-  $('progressText').textContent = '규격서에서 요구사항 추출 중...';
-  await new Promise((r) => setTimeout(r, 30));
-  const reqs = extractRequirements(specFiles);
-  if (!reqs.length) {
+  $('progressBar').style.width = '40%';
+  $('progressText').textContent = '서버에서 대조 중...';
+  try {
+    const data = await api('POST', '/api/inspect', {
+      role: state.role, threshold: state.relevance, org: state.org, project: state.project, notes: state.notes,
+      specFiles: specFiles.map(({ name, text }) => ({ name, text })), compFiles: compFiles.map(({ name, text }) => ({ name, text })),
+    });
+    state.results = data.result;
+    state.inspectedAt = new Date(data.createdAt);
+    $('progressBar').style.width = '100%';
+    $('progressText').textContent = `대조 완료 · 요구사항 ${data.result.reqs.length}건 · ${state.inspectedAt.toLocaleString('ko-KR')} · 서버 처리 ${data.elapsedMs}ms · 기록 저장됨`;
+    renderStep3();
+    toast('대조 검사가 완료되었습니다.', 'success');
+    loadHistory();
+  } catch (err) {
+    $('progressBar').style.width = '0';
+    $('progressText').textContent = `검사 실패: ${err.message}`;
+    toast(err.message, 'error');
+  } finally {
     state.inspecting = false; $('runBtn').disabled = false;
-    $('progressText').textContent = '규격서에서 요구사항 문장(~해야 한다 / shall / 수치 기준)을 찾지 못했습니다.';
-    return toast('규격서에서 요구사항을 추출하지 못했습니다.', 'error');
   }
-  const index = compFiles.flatMap((f) => splitSentences(f.text).map((t) => ({ text: t, file: f.name, terms: termsOf(t), values: parseValues(t) })));
-  const crits = critsOf(state.role);
-  const judged = [];
-  for (let i = 0; i < reqs.length; i++) {
-    judged.push({ ...judge(reqs[i], index, state.relevance), criterionId: classify(reqs[i], crits) });
-    if (i % 20 === 0) {
-      const pct = Math.round(((i + 1) / reqs.length) * 100);
-      $('progressBar').style.width = `${pct}%`;
-      $('progressText').textContent = `요구사항 ${i + 1}/${reqs.length} 대조 중...`;
-      await new Promise((r) => setTimeout(r, 0));
-    }
-  }
-  $('progressBar').style.width = '100%';
-  const roll = (list) => {
-    if (!list.length) return 'NA';
-    if (list.every((r) => r.status === 'MET')) return 'MET';
-    if (list.every((r) => r.status === 'MISSING')) return 'MISSING';
-    return 'REVISION';
-  };
-  const criteria = crits.map((c) => {
-    const reqsOf = judged.filter((r) => r.criterionId === c.id);
-    return { id: c.id, status: roll(reqsOf), reqs: reqsOf };
-  });
-  const other = judged.filter((r) => !r.criterionId);
-  state.results = { criteria, other, reqs: judged, threshold: state.relevance, role: state.role, crits, specFiles: specFiles.map((f) => f.name), compFiles: compFiles.map((f) => f.name) };
-  state.inspectedAt = new Date();
-  state.inspecting = false; $('runBtn').disabled = false;
-  $('progressText').textContent = `대조 완료 · 요구사항 ${judged.length}건 · ${state.inspectedAt.toLocaleString('ko-KR')}`;
-  renderStep3();
-  toast('대조 검사가 완료되었습니다.', 'success');
+}
+
+/* ---------- 로그인 / 기록 ---------- */
+function showAuth() { $('authView').hidden = false; $('appView').hidden = true; }
+function showApp() {
+  $('authView').hidden = true; $('appView').hidden = false;
+  $('userName').textContent = state.user;
+  loadHistory();
+}
+async function loadHistory() {
+  try {
+    const list = await api('GET', '/api/inspections');
+    $('historyList').innerHTML = list.length ? list.map((h) => `<li><button type="button" class="link" data-open="${esc(h.id)}">${esc(new Date(h.createdAt).toLocaleString('ko-KR'))} · ${esc(ROLES[h.role] ? ROLES[h.role].name : h.role)}${h.project ? ` · ${esc(h.project)}` : ''}</button> <small>요구 ${h.summary.reqs} · 충족 ${h.summary.met} · 보완 ${h.summary.rev} · 누락 ${h.summary.miss}</small> <button type="button" class="link danger" data-del="${esc(h.id)}">삭제</button></li>`).join('') : '<li class="muted">저장된 검사 기록이 없습니다.</li>';
+  } catch (_) { /* 로그인 전 */ }
+}
+async function submitAuth(kind) {
+  const username = $('authUser').value.trim(), password = $('authPass').value;
+  $('authErr').textContent = '';
+  try {
+    const r = await api('POST', `/api/${kind}`, { username, password });
+    state.user = r.username; $('authPass').value = ''; showApp();
+  } catch (err) { $('authErr').textContent = err.message; }
 }
 
 function counts() {
@@ -536,11 +410,26 @@ function bind() {
   $('dlTxt').addEventListener('click', exportTxt);
   $('dlJson').addEventListener('click', exportJson);
   $('notes').addEventListener('input', (e) => { state.notes = e.target.value; save(); });
+  $('loginBtn').addEventListener('click', () => submitAuth('login'));
+  $('registerBtn').addEventListener('click', () => submitAuth('register'));
+  $('authForm').addEventListener('submit', (e) => { e.preventDefault(); submitAuth('login'); });
+  $('logoutBtn').addEventListener('click', async () => { try { await api('POST', '/api/logout'); } catch (_) { /* ignore */ } state.user = null; state.results = null; state.files = []; showAuth(); });
+  $('historyList').addEventListener('click', async (e) => {
+    const open = e.target.closest('[data-open]'), del = e.target.closest('[data-del]');
+    try {
+      if (open) {
+        const d = await api('GET', `/api/inspections/${open.dataset.open}`);
+        state.results = d.result; state.role = d.result.role; state.inspectedAt = new Date(d.createdAt);
+        state.org = d.org || ''; state.project = d.project || ''; renderRoles(); syncRole(); goTo(4);
+      } else if (del && confirm('이 검사 기록을 삭제할까요?')) { await api('DELETE', `/api/inspections/${del.dataset.del}`); loadHistory(); }
+    } catch (err) { toast(err.message, 'error'); }
+  });
 }
 
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
   if (!$('roleGrid')) return;
   load();
   $('orgName').value = state.org; $('projectName').value = state.project;
   renderRoles(); renderFiles(); syncRole(); bind(); goTo(1);
+  try { state.user = (await api('GET', '/api/me')).username; showApp(); } catch (_) { showAuth(); }
 });

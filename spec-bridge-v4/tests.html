@@ -2,7 +2,7 @@
 <html lang="ko"><head><meta charset="utf-8"><title>Spec Bridge 테스트</title>
 <style>body{font:14px sans-serif;padding:16px}.p{color:#047857}.f{color:#b91c1c;font-weight:700}</style></head>
 <body><h1>Spec Bridge 판정 엔진 테스트</h1><div id="out"></div><h3 id="sum"></h3>
-<script src="criteria.js"></script><script src="app.js"></script>
+<script src="criteria.js"></script><script src="engine.js"></script><script src="app.js"></script>
 <script>
 const out = document.getElementById('out'); let pass = 0, fail = 0;
 function t(name, fn) { try { const r = fn(); if (r === true) { pass++; out.innerHTML += `<div class="p">PASS ${name}</div>`; } else throw new Error(String(r)); } catch (e) { fail++; out.innerHTML += `<div class="f">FAIL ${name}: ${e.message}</div>`; } }

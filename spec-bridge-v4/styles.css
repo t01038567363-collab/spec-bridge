@@ -24,7 +24,7 @@ h2{margin:0 0 6px;font-size:18px}
 .note{background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:8px 10px;font-size:13px}
 .ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}
 label{display:block;font-size:13px;font-weight:700;margin:12px 0 4px}
-input[type=text],textarea{width:100%;padding:10px 12px;border:1px solid #bfd6ee;border-radius:12px;font:inherit;background:#f8fbff}
+input[type=text],input[type=password],textarea{width:100%;padding:10px 12px;border:1px solid #bfd6ee;border-radius:12px;font:inherit;background:#f8fbff}
 input:focus,textarea:focus{outline:2px solid var(--blue);background:#fff}
 .btn{border:1px solid #bfd6ee;background:#fff;color:var(--blue);padding:9px 14px;border-radius:12px;font:inherit;font-weight:700;font-size:13px;cursor:pointer;white-space:nowrap}
 .btn:hover:not(:disabled){background:#eff6ff}
@@ -78,3 +78,8 @@ footer{text-align:center;color:#64748b;font-size:12px;padding:20px}
 #toasts{position:fixed;top:14px;right:14px;z-index:50;display:flex;flex-direction:column;gap:8px;max-width:340px}
 .toast{padding:10px 14px;border-radius:12px;background:#0f172a;color:#fff;font-size:13px;font-weight:600;box-shadow:0 6px 20px rgba(0,0,0,.25)}
 .toast.success{background:var(--blue)}.toast.error{background:#991b1b}.toast.warn{background:#92400e}
+.auth{max-width:420px;margin:60px auto}
+.auth form{display:block}
+.history{list-style:none;padding:0;margin:0}.history li{padding:6px 0;border-bottom:1px solid #e2e8f0}
+.link{background:none;border:0;color:var(--blue);cursor:pointer;font:inherit;text-decoration:underline;padding:0}
+.link.danger{color:var(--bad);margin-left:8px}

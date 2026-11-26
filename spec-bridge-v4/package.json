@@ -1,0 +1,8 @@
+{
+  "name": "spec-bridge",
+  "version": "5.0.0",
+  "private": true,
+  "description": "Spec Bridge — 규격 대 기업자료 대조 검사 (서버형)",
+  "engines": { "node": ">=18" },
+  "scripts": { "start": "node server.js", "test": "node test.js" }
+}
