@@ -1,0 +1,23 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <title>Spec Bridge 단위 테스트</title>
+  <style>body{font-family:'Malgun Gothic',sans-serif;padding:16px}.ok{color:#047857}.fail{color:#b91c1c}</style>
+</head>
+<body>
+  <h1>Spec Bridge 단위 테스트</h1>
+  <pre id="out">실행 중...</pre>
+  <script src="js/data.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/tests.js"></script>
+  <script>
+    window.__SB_TESTS().then((r) => {
+      const pass = r.filter((x) => x.ok).length;
+      const o = document.getElementById('out');
+      o.textContent = r.map((x) => `${x.ok ? 'PASS' : 'FAIL'}  ${x.name}${x.ok ? '' : '\n      ' + x.err}`).join('\n') + `\n\nRESULT ${pass}/${r.length}`;
+      document.title = `RESULT ${pass}/${r.length}`;
+    });
+  </script>
+</body>
+</html>
