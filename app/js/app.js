@@ -1,4 +1,4 @@
-(function () {
+﻿(function () {
   const { CRITERIA, QUESTIONS, SAMPLE_ANSWERS, COMPANIES, SAMPLE_DOCS } = SB_DATA;
   const E = SB_ENGINE;
   const S = {
@@ -55,7 +55,7 @@
     if (ext === 'pdf') {
       if (!window.pdfjsLib) { toast('PDF.js를 불러오지 못해 파일명만 사용합니다.'); return { name: f.name, size: f.size, extractedText: '' }; }
       try {
-        pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        pdfjsLib.GlobalWorkerOptions.workerSrc = 'vendor/pdf.worker.min.js';
         const pdf = await pdfjsLib.getDocument({ data: await f.arrayBuffer() }).promise;
         let text = '';
         for (let p = 1; p <= Math.min(pdf.numPages, 25); p++) text += (await (await pdf.getPage(p)).getTextContent()).items.map((i) => i.str).join(' ') + '\n';
@@ -148,7 +148,7 @@
       $('#rstQ').onclick = () => { S.answers = {}; S.qErrors = {}; S.qEval = null; render(); };
       $('#runB').onclick = async () => {
         readB(); S.qErrors = {};
-        const api = SB_API.create({ mode: S.mode });
+        const api = SB_API.create({ mode: S.mode, llm: window.SB_LLM });
         const c = await api.handle('POST', '/sessions', { body: { standard_id: api.STANDARD.standard_id, scenario: 'blank' } });
         const h = { Authorization: 'Bearer ' + c.body.token }, sid = c.body.session_id;
         for (const q of QUESTIONS) {
