@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><title>Spec Bridge 테스트</title>
+<style>body{font:14px sans-serif;padding:16px}.p{color:#047857}.f{color:#b91c1c;font-weight:700}</style></head>
+<body><h1>Spec Bridge 판정 엔진 테스트</h1><div id="out"></div><h3 id="sum"></h3>
+<script src="criteria.js"></script><script src="app.js"></script>
+<script>
+const out = document.getElementById('out'); let pass = 0, fail = 0;
+function t(name, fn) { try { const r = fn(); if (r === true) { pass++; out.innerHTML += `<div class="p">PASS ${name}</div>`; } else throw new Error(String(r)); } catch (e) { fail++; out.innerHTML += `<div class="f">FAIL ${name}: ${e.message}</div>`; } }
+const idx = (txt) => splitSentences(txt).map((s) => ({ text: s, file: 'c.txt', terms: termsOf(s), values: parseValues(s) }));
+const run = (spec, comp, th = 0.4) => { const r = extractRequirements([{ name: 's', text: spec }]); return r.map((q) => judge(q, idx(comp), th)); };
+
+t('MTBF 기준 이상 → 충족', () => run('MTBF는 10,000시간 이상이어야 한다.', 'MTBF 예측값은 14,500시간이다.')[0].status === 'MET');
+t('MTBF 기준 미달 → 보완 필요', () => run('MTBF는 10,000시간 이상이어야 한다.', 'MTBF 예측값은 9,000시간이다.')[0].status === 'REVISION');
+t('경계값(동일) 이상 → 충족', () => run('MTBF는 10,000시간 이상이어야 한다.', 'MTBF 예측값은 10,000시간이다.')[0].status === 'MET');
+t('공차 ±0.05 vs ±0.10 → 보완 필요', () => run('주요 치수 공차는 ±0.05mm 이내이어야 한다.', '주요 치수 공차는 ±0.10mm 로 측정되었다.')[0].status === 'REVISION');
+t('단위 불일치(수치 없음) → 보완 필요', () => run('MTBF는 10,000시간 이상이어야 한다.', 'MTBF 예측값을 분석하였다.')[0].status === 'REVISION');
+t('표준 번호 누락 → 보완 필요', () => run('진동 시험은 MIL-STD-810에 따라 수행하여야 한다.', '진동 시험을 수행하였다.')[0].status === 'REVISION');
+t('연관 문장 없음 → 누락', () => run('전략물자 수출통제 해당 여부를 판정하여야 한다.', '커넥터 핀 할당을 정의하였다.')[0].status === 'MISSING');
+t('요구 문장 아닌 일반 문장은 추출 안 됨', () => extractRequirements([{ name: 's', text: '이 문서는 소개 자료이다.' }]).length === 0);
+t('기업 세트 21개 / 국방 세트 47개', () => CRITERIA_SETS.company.length === 21 && CRITERIA_SETS.defense.length === 47);
+t('항목 ID 중복 없음', () => ['company', 'defense'].every((k) => new Set(CRITERIA_SETS[k].map((c) => c.id)).size === CRITERIA_SETS[k].length));
+t('HTML 이스케이프', () => esc('<script>"&') === '&lt;script&gt;&quot;&amp;');
+document.getElementById('sum').textContent = `결과: ${pass} 통과 / ${fail} 실패`;
+</script></body></html>

@@ -11,10 +11,9 @@ const ROLES = {
   company: { name: '기업', desc: '규격 대응 측 — 시험성적서·설계/품질 자료를 등록하고 규격 충족 여부를 사전 점검' },
 };
 const KIND_LABEL = { spec: '국방 규격서', company: '기업 자료' };
-const STATUS_LABEL = { MET: '충족', REVISION: '보완 필요', MISSING: '누락', NA: '판정 제외', OPT: '선택·완화(미흡)' };
-const STATUS_CLS = { MET: 'ok', REVISION: 'warn', MISSING: 'bad', NA: 'na', OPT: 'na' };
-const DEF_IDS = new Set(['CRIT-03', 'CRIT-07', 'CRIT-08', 'CRIT-09', 'CRIT-10', 'CRIT-11', 'CRIT-12', 'CRIT-14']);
-const MODE_LABEL = { defense: '국방용(엄격)', general: '일반 기업용(군 특화 완화)' };
+const STATUS_CLS = { MET: 'ok', REVISION: 'warn', MISSING: 'bad', NA: 'na' };
+const critsOf = (role) => CRITERIA_SETS[role];
+const curCrits = () => (state.results ? state.results.crits : critsOf(state.role));
 
 const state = {
   screen: 1, role: 'company', mode: 'defense', org: '', project: '', notes: '',
@@ -36,13 +35,12 @@ function toast(msg, type = 'info') {
 
 /* ---------- persistence (파일 본문은 저장하지 않음) ---------- */
 function save() {
-  try { localStorage.setItem(STORE_KEY, JSON.stringify({ role: state.role, mode: state.mode, org: state.org, project: state.project, notes: state.notes, relevance: state.relevance })); } catch (_) { /* ignore */ }
+  try { localStorage.setItem(STORE_KEY, JSON.stringify({ role: state.role, org: state.org, project: state.project, notes: state.notes, relevance: state.relevance })); } catch (_) { /* ignore */ }
 }
 function load() {
   try {
     const d = JSON.parse(localStorage.getItem(STORE_KEY) || '{}');
     if (ROLES[d.role]) state.role = d.role;
-    if (MODE_LABEL[d.mode]) state.mode = d.mode;
     state.org = String(d.org || '').slice(0, 40);
     state.project = String(d.project || '').slice(0, 100);
     state.notes = String(d.notes || '').slice(0, 5000);
@@ -71,7 +69,10 @@ function tryGo(n) {
   goTo(n);
 }
 const hasKind = (k) => state.files.some((f) => f.kind === k && f.text.trim());
-function syncRole() { $('roleBadge').textContent = `${ROLES[state.role].name} 구분${state.org ? ` · ${state.org}` : ''}`; }
+function syncRole() {
+  $('roleBadge').textContent = `${ROLES[state.role].name} 구분${state.org ? ` · ${state.org}` : ''}`;
+  $('setInfo').textContent = `적용 항목: ${SET_INFO[state.role]}${state.role === 'defense' ? ' · 국방 추가 19개는 실무 영역 정리이며 기품원 공식 조항이 아닙니다(공식 대조는 KDS STD-0005-1 원문 필요).' : ''}`;
+}
 
 /* ---------- step 1 ---------- */
 function renderRoles() {
@@ -168,7 +169,11 @@ const SAMPLE_SPEC = `1. 신뢰성
 6. 수출통제
 6.1 전략물자 수출통제 해당 여부를 판정한 문서를 제출하여야 한다.
 7. 품질
-7.1 품질경영시스템은 AS9100 또는 ISO 9001 요구사항을 만족하여야 한다.`;
+7.1 품질경영시스템은 AS9100 또는 ISO 9001 요구사항을 만족하여야 한다.
+8. 품질경영
+8.1 내부심사는 연 1회 이상 실시하여야 한다.
+8.2 협력업체 평가 결과를 기록하고 보존하여야 한다.
+8.3 부적합품은 식별하고 격리하여야 한다.`;
 
 const SAMPLE_COMPANY = `[신뢰성 분석서]
 제어기 평균고장간격(MTBF) 예측값은 14,500시간이며 고장모드영향분석(FMEA) 결과를 첨부하였다.
@@ -182,7 +187,9 @@ const SAMPLE_COMPANY = `[신뢰성 분석서]
 [형상관리]
 설계변경은 ECP-001, ECP-002 로 관리하며 개정 이력을 기록하였다.
 [품질]
-당사는 ISO 9001 인증 품질경영시스템을 운영한다.`;
+당사는 ISO 9001 인증 품질경영시스템을 운영한다.
+내부심사는 연 2회 실시하였다.
+협력업체 평가 결과를 기록하고 5년간 보존한다.`;
 
 /* ---------- 텍스트 분석 ---------- */
 const MARK = /(해야|하여야|한다|할 것|하도록|이어야|되어야|이상|이하|이내|초과|미만|shall|must|required|minimum|maximum|at least|at most|±|\+\/-)/i;
@@ -277,9 +284,9 @@ function extractRequirements(specFiles) {
   return reqs;
 }
 
-function classify(req) {
+function classify(req, crits) {
   let best = null, bestN = 0;
-  for (const c of CRITERIA) {
+  for (const c of crits) {
     const n = c.kw.filter((kw) => kwRegex(kw).test(req.text)).length;
     if (n > bestN) { best = c; bestN = n; }
   }
@@ -334,9 +341,10 @@ async function runInspection() {
     return toast('규격서에서 요구사항을 추출하지 못했습니다.', 'error');
   }
   const index = compFiles.flatMap((f) => splitSentences(f.text).map((t) => ({ text: t, file: f.name, terms: termsOf(t), values: parseValues(t) })));
+  const crits = critsOf(state.role);
   const judged = [];
   for (let i = 0; i < reqs.length; i++) {
-    judged.push({ ...judge(reqs[i], index, state.relevance), criterionId: classify(reqs[i]) });
+    judged.push({ ...judge(reqs[i], index, state.relevance), criterionId: classify(reqs[i], crits) });
     if (i % 20 === 0) {
       const pct = Math.round(((i + 1) / reqs.length) * 100);
       $('progressBar').style.width = `${pct}%`;
@@ -351,14 +359,12 @@ async function runInspection() {
     if (list.every((r) => r.status === 'MISSING')) return 'MISSING';
     return 'REVISION';
   };
-  const criteria = CRITERIA.map((c) => {
+  const criteria = crits.map((c) => {
     const reqsOf = judged.filter((r) => r.criterionId === c.id);
-    const defStatus = roll(reqsOf);
-    const genStatus = DEF_IDS.has(c.id) && (defStatus === 'REVISION' || defStatus === 'MISSING') ? 'OPT' : defStatus;
-    return { id: c.id, defStatus, genStatus, status: state.mode === 'defense' ? defStatus : genStatus, reqs: reqsOf };
+    return { id: c.id, status: roll(reqsOf), reqs: reqsOf };
   });
   const other = judged.filter((r) => !r.criterionId);
-  state.results = { criteria, other, reqs: judged, threshold: state.relevance, mode: state.mode, specFiles: specFiles.map((f) => f.name), compFiles: compFiles.map((f) => f.name) };
+  state.results = { criteria, other, reqs: judged, threshold: state.relevance, role: state.role, crits, specFiles: specFiles.map((f) => f.name), compFiles: compFiles.map((f) => f.name) };
   state.inspectedAt = new Date();
   state.inspecting = false; $('runBtn').disabled = false;
   $('progressText').textContent = `대조 완료 · 요구사항 ${judged.length}건 · ${state.inspectedAt.toLocaleString('ko-KR')}`;
@@ -371,7 +377,7 @@ function counts() {
   const c = (arr, s) => arr.filter((x) => x.status === s).length;
   return {
     reqMet: c(r.reqs, 'MET'), reqRev: c(r.reqs, 'REVISION'), reqMiss: c(r.reqs, 'MISSING'), reqTotal: r.reqs.length,
-    crMet: c(r.criteria, 'MET'), crRev: c(r.criteria, 'REVISION'), crMiss: c(r.criteria, 'MISSING'), crNa: c(r.criteria, 'NA'), crOpt: c(r.criteria, 'OPT'),
+    crMet: c(r.criteria, 'MET'), crRev: c(r.criteria, 'REVISION'), crMiss: c(r.criteria, 'MISSING'), crNa: c(r.criteria, 'NA'), crTotal: r.criteria.length,
   };
 }
 
@@ -380,7 +386,7 @@ function chips(id, items, current, onPick) {
   $(id).innerHTML = items.map(([v, l]) => `<button type="button" class="chip ${v === current ? 'active' : ''}" data-chip="${esc(v)}">${esc(l)}</button>`).join('');
   $(id).onclick = (e) => { const b = e.target.closest('[data-chip]'); if (b) onPick(b.dataset.chip); };
 }
-const domainItems = () => [['ALL', '전체'], ...[...new Set(CRITERIA.map((c) => c.domain))].map((d) => [d, d])];
+const domainItems = () => [['ALL', '전체'], ...[...new Set(curCrits().map((c) => c.domain))].map((d) => [d, d])];
 
 function reqHtml(r) {
   const cls = STATUS_CLS[r.status];
@@ -405,8 +411,7 @@ function critCard(c, entry, detail, statusFilter) {
   const body = detail && entry && reqs.length ? `<details ${statusFilter !== 'ALL' ? 'open' : ''}><summary>요구사항별 대조 ${reqs.length}건</summary>${reqs.map(reqHtml).join('')}</details>` : '';
   return `<article class="crit ${st || ''}">
     <div class="row between wrap"><h3>${esc(c.id)} · ${esc(c.title)}</h3>${st ? `<span class="tag ${cls}">${STATUS_LABEL[st]}</span>` : ''}</div>
-    <div class="meta">${esc(c.domain)} · ${esc(c.code)} · <b>${DEF_IDS.has(c.id) ? '군 특화(국방 필수)' : '공통 핵심'}</b></div>
-    ${entry && st !== 'NA' ? `<p class="muted">국방 기준: <b>${STATUS_LABEL[entry.defStatus]}</b> · 일반 기업 기준: <b>${STATUS_LABEL[entry.genStatus]}</b>${entry.defStatus !== entry.genStatus ? ' (군 특화 요건으로 일반 기업 사업에서는 선택·완화 가능)' : ''}</p>` : ''}${summary}${body}</article>`;
+    <div class="meta">${esc(c.domain)} · ${esc(c.code)}</div>${summary}${body}</article>`;
 }
 
 function renderStep3() {
@@ -418,27 +423,27 @@ function renderStep3() {
   $('runBtn').disabled = state.inspecting || !sc || !cc;
   $('toScreen4').disabled = !state.results;
   chips('domainFilters', domainItems(), state.domainFilter, (d) => { state.domainFilter = d; renderStep3(); });
-  const list = CRITERIA.filter((c) => state.domainFilter === 'ALL' || c.domain === state.domainFilter);
-  $('criteriaList').innerHTML = list.map((c) => critCard(c, state.results && state.results.criteria.find((x) => x.id === c.id), false)).join('');
+  const list = curCrits().filter((c) => state.domainFilter === 'ALL' || c.domain === state.domainFilter);
+  $('criteriaList').innerHTML = list.map((c) => critCard(c, state.results && state.results.criteria.find((x) => x.id === c.id), false))  .join('');
 }
 
 function renderReport() {
   syncRole();
   const s = counts();
-  $('s4Time').textContent = `검사 시각 ${state.inspectedAt.toLocaleString('ko-KR')} · 모드 ${MODE_LABEL[state.results.mode]} · 연관도 기준 ${state.results.threshold.toFixed(2)} · 규격 ${state.results.specFiles.length}개 / 기업자료 ${state.results.compFiles.length}개`;
+  $('s4Time').textContent = `검사 시각 ${state.inspectedAt.toLocaleString('ko-KR')} · 구분 ${ROLES[state.results.role].name} · 항목 ${state.results.crits.length}개 · 연관도 기준 ${state.results.threshold.toFixed(2)} · 규격 ${state.results.specFiles.length}개 / 기업자료 ${state.results.compFiles.length}개`;
   $('stats').innerHTML = [
     ['요구사항 총계', s.reqTotal, ''], ['충족', s.reqMet, 'ok'], ['보완 필요', s.reqRev, 'warn'], ['누락', s.reqMiss, 'bad'],
-    ['기준 충족', `${s.crMet}/${CRITERIA.length - s.crNa}`, 'ok'], ['선택·완화(미흡)', s.crOpt, ''], ['기준 판정 제외', s.crNa, ''],
+    ['기준 충족', `${s.crMet}/${s.crTotal - s.crNa}`, 'ok'], ['기준 판정 제외', s.crNa, ''],
   ].map(([l, v, c]) => `<div class="stat"><b class="${c}">${v}</b>${l}</div>`).join('');
   chips('statusFilters', [['ALL', '전체 상태'], ['MET', '충족'], ['REVISION', '보완 필요'], ['MISSING', '누락']], state.statusFilter, (v) => { state.statusFilter = v; renderReport(); });
   chips('reportFilters', domainItems(), state.domainFilter, (d) => { state.domainFilter = d; renderReport(); });
-  const list = CRITERIA.filter((c) => state.domainFilter === 'ALL' || c.domain === state.domainFilter);
+  const list = state.results.crits.filter((c) => state.domainFilter === 'ALL' || c.domain === state.domainFilter);
   let html = list.map((c) => {
     const e = state.results.criteria.find((x) => x.id === c.id);
     return state.statusFilter !== 'ALL' && e.status !== state.statusFilter && e.status !== 'REVISION' && e.status !== 'MISSING' && e.status !== 'MET' ? '' : critCard(c, e, true, state.statusFilter);
   }).join('');
   const other = state.results.other.filter((r) => state.statusFilter === 'ALL' || r.status === state.statusFilter);
-  if (state.domainFilter === 'ALL' && other.length) html += `<article class="crit"><h3>기타 · 15개 기준에 분류되지 않은 규격 요구</h3><details><summary>${other.length}건</summary>${other.map(reqHtml).join('')}</details></article>`;
+  if (state.domainFilter === 'ALL' && other.length) html += `<article class="crit"><h3>기타 · 심사 항목에 분류되지 않은 규격 요구</h3><details><summary>${other.length}건</summary>${other.map(reqHtml).join('')}</details></article>`;
   $('reportList').innerHTML = html;
   $('notes').value = state.notes;
 }
@@ -456,16 +461,16 @@ function exportTxt() {
   const s = counts();
   const L = ['[스펙 브릿지] 규격 대 기업자료 대조 검사 리포트', `구분: ${ROLES[state.role].name}`, `기관/기업: ${state.org || '-'}`, `사업명: ${state.project || '-'}`,
     `검사 시각: ${state.inspectedAt.toLocaleString('ko-KR')}`, `규격서: ${state.results.specFiles.join(', ')}`, `기업 자료: ${state.results.compFiles.join(', ')}`,
-    `적용 모드: ${MODE_LABEL[state.results.mode]}`, `연관도 기준값: ${state.results.threshold.toFixed(2)}`,
+    `적용 항목 세트: ${SET_INFO[state.results.role]}`, `연관도 기준값: ${state.results.threshold.toFixed(2)}`,
     `요구사항 ${s.reqTotal}건: 충족 ${s.reqMet} / 보완 ${s.reqRev} / 누락 ${s.reqMiss}`, '※ 사전 점검 보조 결과이며 공식 적합 판정이 아닙니다.', ''];
   const dump = (r) => {
     L.push(`  - [${STATUS_LABEL[r.status]}] ${r.text} (${r.file})`);
     r.evidence.forEach((e) => L.push(`      기업자료(${e.file}): ${e.text}`));
     r.issues.forEach((i) => L.push(`      · ${i}`));
   };
-  for (const c of CRITERIA) {
+  for (const c of state.results.crits) {
     const e = state.results.criteria.find((x) => x.id === c.id);
-    L.push(`${c.id} [${STATUS_LABEL[e.status]}] ${c.title} (${DEF_IDS.has(c.id) ? '군 특화' : '공통'} · 국방 기준 ${STATUS_LABEL[e.defStatus]} / 일반 기업 기준 ${STATUS_LABEL[e.genStatus]})`);
+    L.push(`${c.id} [${STATUS_LABEL[e.status]}] ${c.title} (${c.domain})`);
     e.reqs.forEach(dump);
   }
   if (state.results.other.length) { L.push('기타(분류 외)'); state.results.other.forEach(dump); }
@@ -478,7 +483,7 @@ function exportJson() {
   download(`스펙브릿지_리포트_${safeName()}.json`, 'application/json', JSON.stringify({
     role: state.role, org: state.org, project: state.project, inspectedAt: state.inspectedAt.toISOString(), relevanceThreshold: state.results.threshold,
     specFiles: state.results.specFiles, companyFiles: state.results.compFiles, summary: counts(), notes: state.notes,
-    criteria: CRITERIA.map((c) => { const e = state.results.criteria.find((x) => x.id === c.id); return { id: c.id, title: c.title, domain: c.domain, tier: DEF_IDS.has(c.id) ? 'defense-specific' : 'common', status: e.status, defenseStatus: e.defStatus, generalStatus: e.genStatus, requirements: e.reqs.map(strip) }; }),
+    criteria: state.results.crits.map((c) => { const e = state.results.criteria.find((x) => x.id === c.id); return { id: c.id, title: c.title, domain: c.domain, code: c.code, status: e.status, requirements: e.reqs.map(strip) }; }),
     other: state.results.other.map(strip),
   }, null, 2));
 }
@@ -487,10 +492,10 @@ function exportJson() {
 function bind() {
   document.querySelectorAll('[data-step]').forEach((b) => b.addEventListener('click', () => tryGo(Number(b.dataset.step))));
   document.querySelector('[data-go]').addEventListener('click', () => goTo(1));
-  $('roleGrid').addEventListener('click', (e) => { const b = e.target.closest('[data-role]'); if (b) { state.role = b.dataset.role; save(); renderRoles(); syncRole(); renderFiles(); } });
+  $('roleGrid').addEventListener('click', (e) => { const b = e.target.closest('[data-role]'); if (b) { state.role = b.dataset.role; state.results = null; state.domainFilter = 'ALL'; save(); renderRoles(); syncRole(); renderFiles(); } });
   $('profileForm').addEventListener('submit', (e) => {
     e.preventDefault();
-    state.mode = $('modeSel').value; state.results = null;
+    state.results = null;
     state.org = $('orgName').value.trim(); state.project = $('projectName').value.trim();
     save(); syncRole(); goTo(2);
   });
@@ -520,7 +525,8 @@ function bind() {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
+  if (!$('roleGrid')) return;
   load();
-  $('modeSel').value = state.mode; $('orgName').value = state.org; $('projectName').value = state.project;
+  $('orgName').value = state.org; $('projectName').value = state.project;
   renderRoles(); renderFiles(); syncRole(); bind(); goTo(1);
 });
