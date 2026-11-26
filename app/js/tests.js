@@ -247,6 +247,32 @@
     eq(o._logs.length > 0 && JSON.stringify(o._logs).includes('부대명'), false);
   });
 
+  t('API 토큰 저장: SHA-256 해시(sha256:…), 평문 미보관', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    const h = o._sessions.get(a.sid).tokenHash;
+    eq([h.startsWith('sha256:'), h.length], [true, 71]);
+  });
+  const mockFetch = (status, content) => async () => ({ ok: status === 200, status, json: async () => ({ choices: [{ message: { content } }] }) });
+  t('LLM 어댑터: 설정 누락 시 오류, 정상 응답 → api draft가 llm 모드', async () => {
+    let threw = false; try { SB_LLM_ADAPTER.create({}); } catch (e) { threw = true; } eq(threw, true);
+    const good = JSON.stringify(goodLlm());
+    const o = API.create({ llm: SB_LLM_ADAPTER.create({ endpoint: 'x', model: 'm', fetchImpl: mockFetch(200, good) }) });
+    const a = await sess(o, 'company_a'); await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    const d = await o.handle('POST', `/sessions/${a.sid}/draft`, { headers: a.h, body: { mode: 'auto' } });
+    eq([d.body.generation_mode, d.body.fallback_reason], ['llm', null]);
+  });
+  t('LLM 어댑터: HTTP 500·깨진 JSON → 템플릿 폴백(LLM_ERROR / OUTPUT_INVALID)', async () => {
+    const run = async (f) => {
+      const o = API.create({ llm: SB_LLM_ADAPTER.create({ endpoint: 'x', model: 'm', fetchImpl: f }) });
+      const a = await sess(o, 'company_a'); await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+      return (await o.handle('POST', `/sessions/${a.sid}/draft`, { headers: a.h, body: { mode: 'auto' } })).body;
+    };
+    const e500 = await run(mockFetch(500, ''));
+    const bad = await run(mockFetch(200, '{not json'));
+    eq([e500.generation_mode, bad.generation_mode, bad.fallback_reason], ['template', 'template', 'OUTPUT_INVALID']);
+    eq(e500.fallback_reason !== null, true);
+  });
+
   window.__SB_TESTS = async function () {
     const out = [];
     for (const c of cases) {

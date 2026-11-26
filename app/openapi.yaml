@@ -1,0 +1,181 @@
+openapi: 3.0.3
+info:
+  title: Spec Bridge API
+  version: "3.0"
+  description: TRD v3 §3 계약. 비인증 시연 환경. 공식 인증·심사가 아닙니다.
+servers:
+  - url: /api/v1
+components:
+  securitySchemes:
+    session:
+      type: http
+      scheme: bearer
+      description: POST /sessions 응답의 token. 서버에는 SHA-256 해시만 보관.
+  schemas:
+    Error:
+      type: object
+      required: [request_id, error]
+      properties:
+        request_id: { type: string }
+        error:
+          type: object
+          required: [code, message]
+          properties:
+            code:
+              type: string
+              enum: [E-REQ-01, E-AUTH-01, E-NF-01, E-NF-02, E-STATE-01, E-STATE-02, E-IN-01, E-IN-02, E-IN-05, E-RATE-01, E-SYS-01, E-SYS-07, E-SYS-08]
+            message: { type: string }
+            details:
+              type: array
+              items:
+                type: object
+                properties: { field: { type: string }, reason: { type: string }, received: {} }
+    Evidence:
+      type: object
+      required: [id, state]
+      properties:
+        id: { type: string }
+        state: { type: string, enum: [보유, 미보유] }
+        meta: { type: object, additionalProperties: { type: string } }
+    Answer:
+      type: object
+      properties:
+        value: { type: number, minimum: 0, maximum: 1000000, description: 소수 4자리까지 }
+        unit: { type: string, description: 문항의 허용 단위 }
+        condition: { type: string, enum: [합치, 불일치, 미확인] }
+        evidence: { type: array, items: { $ref: '#/components/schemas/Evidence' } }
+        note: { type: string, maxLength: 200, description: 민감정보 입력 금지(E-IN-05) }
+    Source:
+      type: object
+      properties:
+        doc_name: { type: string }
+        clause: { type: string }
+        page: { type: string }
+        source_status: { type: string, enum: [unverified, verified] }
+    Result:
+      type: object
+      required: [qid, status, reason_code, reason, source]
+      properties:
+        qid: { type: string }
+        status: { type: string, enum: [충족, 미흡, 확인 필요] }
+        reason_code: { type: string }
+        reason: { type: string }
+        source: { $ref: '#/components/schemas/Source' }
+        missing: { type: array, items: { type: string } }
+        guide: { type: string }
+        facts: { type: object }
+    Draft:
+      type: object
+      required: [draft_id, generation_mode, items, checklist, disclaimer, generated_at]
+      properties:
+        draft_id: { type: string }
+        generation_mode: { type: string, enum: [template, llm] }
+        fallback_reason: { type: string, nullable: true, enum: [LLM_TIMEOUT, LLM_ERROR, OUTPUT_INVALID, null] }
+        items: { type: array, items: { type: object, properties: { qid: { type: string }, summary: { type: string }, action: { type: string } } } }
+        checklist: { type: array, items: { type: object, properties: { label: { type: string }, qid: { type: string } } } }
+        disclaimer: { type: string }
+        generated_at: { type: string, format: date-time }
+  responses:
+    Err:
+      description: 표준 오류
+      content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } }
+paths:
+  /standards:
+    get: { operationId: A1, summary: 규격 목록, responses: { '200': { description: OK } } }
+  /standards/{standard_id}/questions:
+    get:
+      operationId: A2
+      summary: 문항 목록(기준값 제외)
+      parameters: [{ name: standard_id, in: path, required: true, schema: { type: string } }]
+      responses: { '200': { description: OK }, '404': { $ref: '#/components/responses/Err' } }
+  /sessions:
+    post:
+      operationId: A3
+      summary: 세션 생성
+      parameters: [{ name: Idempotency-Key, in: header, schema: { type: string, maxLength: 64 } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [standard_id]
+              properties:
+                standard_id: { type: string }
+                scenario: { type: string, enum: [company_a, blank], default: company_a }
+      responses:
+        '201': { description: 생성(token 최초 1회 반환) }
+        '200': { description: 같은 키 재요청 — 기존 세션, 새 토큰 발급·이전 토큰 폐기 }
+        '404': { $ref: '#/components/responses/Err' }
+        '422': { $ref: '#/components/responses/Err' }
+  /sessions/{sid}/answers/{qid}:
+    put:
+      operationId: A4
+      summary: 문항 입력 저장(덮어쓰기, 멱등)
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }, { name: qid, in: path, required: true, schema: { type: string } }]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/Answer' } } } }
+      responses:
+        '200': { description: '{qid, revision, saved_at, stale_results}' }
+        '400': { $ref: '#/components/responses/Err' }
+        '401': { $ref: '#/components/responses/Err' }
+        '404': { $ref: '#/components/responses/Err' }
+        '422': { $ref: '#/components/responses/Err' }
+  /sessions/{sid}/evaluate:
+    post:
+      operationId: A5
+      summary: 전 문항 판정(멱등)
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200':
+          description: OK
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  evaluated_at: { type: string, format: date-time }
+                  summary: { type: object }
+                  results: { type: array, items: { $ref: '#/components/schemas/Result' } }
+        '401': { $ref: '#/components/responses/Err' }
+        '404': { $ref: '#/components/responses/Err' }
+  /sessions/{sid}/results/{qid}:
+    get:
+      operationId: A6
+      summary: 문항별 결과
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }, { name: qid, in: path, required: true, schema: { type: string } }]
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Result' } } } }
+        '409': { $ref: '#/components/responses/Err' }
+        '404': { $ref: '#/components/responses/Err' }
+  /sessions/{sid}/draft:
+    post:
+      operationId: A7
+      summary: 검토용 초안(평가 후, 입력 변경 시 재평가 필요)
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { mode: { type: string, enum: [auto, template], default: auto } } } } }
+      responses:
+        '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/Draft' } } } }
+        '409': { $ref: '#/components/responses/Err' }
+        '429': { $ref: '#/components/responses/Err' }
+        '504': { $ref: '#/components/responses/Err' }
+  /sessions/{sid}/export:
+    get:
+      operationId: A8
+      summary: 초안 내려받기(text/markdown)
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }, { name: format, in: query, required: true, schema: { type: string, enum: [md] } }]
+      responses: { '200': { description: OK, content: { text/markdown: {} } }, '409': { $ref: '#/components/responses/Err' }, '422': { $ref: '#/components/responses/Err' } }
+  /sessions/{sid}:
+    delete:
+      operationId: A9
+      summary: 세션 삭제(멱등, 항상 204)
+      security: [{ session: [] }]
+      parameters: [{ name: sid, in: path, required: true, schema: { type: string } }]
+      responses: { '204': { description: 삭제됨 또는 이미 없음 } }
+  /notices:
+    get: { operationId: A10, summary: 보안 고지 4항목, responses: { '200': { description: OK } } }

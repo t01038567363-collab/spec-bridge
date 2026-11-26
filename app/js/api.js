@@ -1,6 +1,6 @@
 /* TRD v3 §3 REST 계약(A1~A10)을 브라우저 안에서 그대로 구현한 API 계층.
  * 서버 없이 동작하며, 같은 경로·상태코드·오류 코드를 사용하므로 나중에 FastAPI로 교체할 때 UI·테스트를 그대로 쓸 수 있다.
- * 토큰은 해시(비암호학적 cyrb53)만 보관한다. 시연용이며 실제 서버에서는 SHA-256 이상을 사용해야 한다. */
+ * 토큰은 SHA-256 해시만 보관한다(crypto.subtle 사용 불가 시 비암호학적 해시로 폴백). */
 (function () {
   const D = typeof SB_DATA !== 'undefined' ? SB_DATA : require('./data.js');
   const E = typeof SB_ENGINE !== 'undefined' ? SB_ENGINE : require('./engine.js');
@@ -13,7 +13,15 @@
     { id: 'N4', text: '로그에는 문항 ID·오류 코드만 남기고 입력 값·비고는 남기지 않습니다.' },
   ];
 
-  function hash(s) {
+  async function hash(s) {
+    const subtle = typeof crypto !== 'undefined' && crypto.subtle;
+    if (subtle) {
+      const d = await subtle.digest('SHA-256', new TextEncoder().encode(s));
+      return 'sha256:' + Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
+    }
+    return 'cyrb53:' + weakHash(s); // crypto.subtle 없는 환경(비보안 컨텍스트) 폴백
+  }
+  function weakHash(s) {
     let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
     for (let i = 0; i < s.length; i++) { const c = s.charCodeAt(i); h1 = Math.imul(h1 ^ c, 2654435761); h2 = Math.imul(h2 ^ c, 1597334677); }
     h1 = Math.imul(h1 ^ (h1 >>> 16), 2246822507) ^ Math.imul(h2 ^ (h2 >>> 13), 3266489909);
@@ -36,12 +44,12 @@
       return { status, body: { request_id: 'r_' + (++seq), error: { code, message, ...(details ? { details } : {}) } } };
     };
 
-    function auth(sid, token) {
+    async function auth(sid, token) {
       const s = sessions.get(sid);
       if (s && now() > s.expires) { sessions.delete(sid); }
       const cur = sessions.get(sid);
       if (!cur) return { e: err(404, 'E-NF-01', '세션이 없거나 만료·삭제되었습니다.') };
-      if (!token || hash(token) !== cur.tokenHash) return { e: err(401, 'E-AUTH-01', '토큰이 없거나 일치하지 않습니다.') };
+      if (!token || (await hash(token)) !== cur.tokenHash) return { e: err(401, 'E-AUTH-01', '토큰이 없거나 일치하지 않습니다.') };
       return { s: cur };
     }
     const qOf = (qid) => D.QUESTIONS.find((q) => q.qid === qid);
@@ -70,20 +78,21 @@
         if (body.scenario != null && !['company_a', 'blank'].includes(body.scenario)) return err(422, 'E-IN-01', 'scenario 값이 올바르지 않습니다.', [{ field: 'scenario', reason: 'allowed: company_a|blank' }]);
         const key = h['Idempotency-Key'] || h['idempotency-key'];
         if (key && String(key).length > 64) return err(422, 'E-IN-01', 'Idempotency-Key는 64자 이하입니다.');
-        const mk = (s, status) => {
-          const t = rnd(32); s.tokenHash = hash(t); // 새 토큰 발급, 이전 토큰 폐기
+        const mk = async (s, status) => {
+          const t = rnd(32); s.tokenHash = await hash(t); // 새 토큰 발급, 이전 토큰 폐기
           return ok(status, { session_id: s.id, token: t, expires_at: iso(s.expires), notices: NOTICES, environment: '비인증 시연 환경' });
         };
-        if (key) { const sid = idem.get(hash(String(key))); const ex = sid && sessions.get(sid); if (ex && now() <= ex.expires) return mk(ex, 200); }
+        const kh = key ? await hash(String(key)) : null;
+        if (key) { const sid = idem.get(kh); const ex = sid && sessions.get(sid); if (ex && now() <= ex.expires) return mk(ex, 200); }
         const s = { id: 's_' + rnd(12), expires: now() + TTL_MS, answers: {}, revision: {}, state: 'CREATED', results: null, stale: false, drafts: [], calls: [] };
         if ((body.scenario || 'company_a') === 'company_a') { s.answers = JSON.parse(JSON.stringify(D.SAMPLE_ANSWERS)); for (const q of Object.keys(s.answers)) s.revision[q] = 1; s.state = 'ANSWERING'; }
         sessions.set(s.id, s);
-        if (key) idem.set(hash(String(key)), s.id);
+        if (key) idem.set(kh, s.id);
         return mk(s, 201);
       }
 
       if (seg[0] !== 'sessions' || !seg[1]) return err(404, 'E-NF-01', '알 수 없는 경로입니다.');
-      const a = auth(seg[1], token);
+      const a = await auth(seg[1], token);
       if (a.e) {
         // 삭제는 멱등: 이미 없는 세션도 204
         if (method === 'DELETE' && seg.length === 2 && a.e.status === 404) return ok(204, null);

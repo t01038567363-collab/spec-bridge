@@ -1,0 +1,39 @@
+<!DOCTYPE html><html><head><meta charset="UTF-8"><title>E2E 실행 중</title></head><body>
+<div id="banner"></div><nav id="stepper"></nav><div id="view"></div><div id="toast"></div><pre id="out"></pre>
+<script src="js/data.js"></script><script src="js/engine.js"></script><script src="js/api.js"></script><script src="js/llm.js"></script><script src="js/app.js"></script>
+<script>
+/* UI 흐름 자동 테스트. 브라우저로 열면 결과가 표시되고, 헤드리스 Edge에서는 제목에 RESULT가 남는다. */
+(async () => {
+  const w = (ms) => new Promise((r) => setTimeout(r, ms));
+  const $ = (s) => document.querySelector(s), $$ = (s) => [...document.querySelectorAll(s)];
+  const res = [], t = (n, ok) => res.push({ n, ok: !!ok });
+  try {
+    t('1단계 렌더·비인증 배너', $('#banner').textContent.includes('공식 인증') && $$('#stepper button').length === 4);
+    $('#n1').click();
+    t('파일 없이 문서 검사 → 전 항목 누락 12건', ($('#smp'), $('#n2').click(), $('#runA').click(), $$('.s-MISSING').length === 12));
+    $('#p2').click(); $('#smp').click();
+    t('샘플 업로드 후 파일 목록 표시', $$('li').length >= 1);
+    $('#n2').click(); $('#runA').click();
+    t('샘플 문서 검사 12항목 렌더', $$('.item').length === 12);
+    $('[data-t=B]').click();
+    $('#runB').click(); await w(800);
+    t('빈 입력 판정 → 충족 0건, 10문항 모두 미흡·확인 필요(임의 충족 없음)', ($('#n3').click(), $$('.s-충족').length === 0 && $$('.s-확인, .s-미흡').length === 10));
+    $('[data-s="3"]').click(); $('[data-t=B]').click(); $('#loadS').click(); $('#runB').click(); await w(800);
+    $('#n3').click();
+    const stats = $$('.stat b').map((b) => b.textContent).join('/');
+    t('기업 A 샘플 → 6/2/2', stats === '6/2/2');
+    t('초안·면책 문구 표시', document.body.textContent.includes('검토용 초안') && document.body.textContent.includes('공식 심사'));
+    $('[data-f="미흡"]').click();
+    t('미흡 필터 → 2건', $$('.item.s-미흡').length === 2);
+    $('[data-s="3"]').click(); $('[data-t=B]').click();
+    $('.q[data-q=Q05] .u').value = 'inch'; $('.q[data-q=Q05] .u').insertAdjacentHTML('beforeend', ''); 
+    $('#runB').click(); await w(800);
+    t('허용되지 않은 단위 → 오류 표시(E-IN-02)·리포트로 넘어가지 않음', $('.q.err') && $('.q.err').textContent.includes('E-IN-02'));
+    $('[data-s="1"]').click(); $('#co').value = 'custom'; $('#co').dispatchEvent(new Event('change'));
+    $('#n1').click(); t('직접 입력 기업명 없으면 진행 차단', $('[data-s="1"]').classList.contains('on'));
+  } catch (e) { t('예외 ' + e.message, false); }
+  const pass = res.filter((x) => x.ok).length;
+  $('#out').textContent = res.map((x) => (x.ok ? 'PASS ' : 'FAIL ') + x.n).join('\n') + `\nRESULT ${pass}/${res.length}`;
+  document.title = `RESULT ${pass}/${res.length}`;
+})();
+</script></body></html>
