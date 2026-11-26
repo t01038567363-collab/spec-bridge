@@ -23,7 +23,7 @@
   </form>
 </main>
 
-<div id="appView" hidden>
+<div id="appView" class="app-shell" hidden>
 <header class="topbar">
   <button class="brand" data-go="1" type="button">
     <span class="logo">SB</span>
@@ -35,9 +35,47 @@
     <button type="button" data-step="3">3 대조 검사</button>
     <button type="button" data-step="4">4 결과 리포트</button>
   </nav>
+  <button id="voiceBtn" type="button" class="btn small">🔊 구두 안내</button>
   <span id="roleBadge" class="badge"></span>
   <span class="badge" id="userName"></span><button id="logoutBtn" type="button" class="btn">로그아웃</button>
 </header>
+<div class="progress-strip"><div id="appProgress"></div></div>
+
+<div class="shell-grid">
+<aside class="drawer no-print">
+  <div class="drawer-card">
+    <div class="eyebrow">현재 세션</div>
+    <div id="drwRole" class="drw-title">기업</div>
+    <div id="drwProject" class="muted">-</div>
+    <div class="drw-row"><span>규격서</span><b id="drwSpec">0개</b></div>
+    <div class="drw-row"><span>기업 자료</span><b id="drwComp">0개</b></div>
+    <div class="drw-row"><span>심사 항목</span><b id="drwCrit">-</b></div>
+  </div>
+  <nav class="drw-menu" aria-label="메뉴">
+    <button type="button" data-step="1">01. 구분 선택<span>›</span></button>
+    <button type="button" data-step="2">02. 자료 업로드<span>›</span></button>
+    <button type="button" data-step="3">03. 대조 검사<span>›</span></button>
+    <button type="button" data-step="4">04. 충족·보완·누락 리포트<span>›</span></button>
+  </nav>
+  <div class="drawer-card">
+    <strong>심사 항목 구두 안내</strong>
+    <p class="muted">선택한 구분의 심사 항목(조항 번호·명칭)을 음성으로 듣습니다. 브라우저 음성 기능이 필요합니다.</p>
+    <button id="voiceBtn2" type="button" class="btn block small">항목 구두 안내 듣기</button>
+  </div>
+  <div class="guide">
+    <strong>판정 컬러 가이드</strong>
+    <div><span>충족</span><i class="dot g"></i></div>
+    <div><span>보완 필요</span><i class="dot y"></i></div>
+    <div><span>누락</span><i class="dot o"></i></div>
+  </div>
+</aside>
+
+<div id="voicePanel" class="voice-panel no-print" hidden>
+  <div class="row between"><strong>항목 구두 안내</strong><button id="voiceClose" type="button" class="btn small">닫기</button></div>
+  <p id="voiceStatus" class="muted">재생 대기</p>
+  <div class="row wrap"><button id="voicePlayAll" type="button" class="btn primary small">전체 재생</button><button id="voiceStop" type="button" class="btn small">정지</button></div>
+  <ol id="voiceList" class="voice-list"></ol>
+</div>
 
 <main>
   <section id="screen1" class="screen">
@@ -151,6 +189,7 @@
     </div>
   </section>
 </main>
+</div>
 
 <footer>스펙 브릿지 v5 · 서버 판정(Node.js) · 사전 점검 보조 도구</footer>
 </div>

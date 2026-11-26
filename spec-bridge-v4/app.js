@@ -52,11 +52,14 @@ function load() {
 function goTo(n) {
   state.screen = n;
   for (let i = 1; i <= 4; i++) $(`screen${i}`).hidden = i !== n;
-  document.querySelectorAll('.steps button').forEach((b) => {
+  document.querySelectorAll('.steps button, .drw-menu button').forEach((b) => {
     const i = Number(b.dataset.step);
     b.classList.toggle('active', i === n);
     b.classList.toggle('done', i < n);
   });
+  $('appProgress').style.width = `${n * 25}%`;
+  document.querySelectorAll('main > .screen:not([hidden])').forEach((s) => { s.classList.remove('screen-enter'); void s.offsetWidth; s.classList.add('screen-enter'); });
+  syncDrawer();
   if (n === 2) renderFiles();
   if (n === 3) renderStep3();
   if (n === 4) renderReport();
@@ -68,7 +71,15 @@ function tryGo(n) {
   goTo(n);
 }
 const hasKind = (k) => state.files.some((f) => f.kind === k && f.text.trim());
+function syncDrawer() {
+  $('drwRole').textContent = ROLES[state.role].name;
+  $('drwProject').textContent = state.project || state.org || '-';
+  $('drwSpec').textContent = `${state.files.filter((f) => f.kind === 'spec').length}개`;
+  $('drwComp').textContent = `${state.files.filter((f) => f.kind === 'company').length}개`;
+  $('drwCrit').textContent = `${critsOf(state.role).length}개 기준`;
+}
 function syncRole() {
+  syncDrawer();
   $('roleBadge').textContent = `${ROLES[state.role].name} 구분${state.org ? ` · ${state.org}` : ''}`;
   $('setInfo').textContent = `적용 항목: ${SET_INFO[state.role]}${state.role === 'defense' ? ' · 국방 추가 19개는 실무 영역 정리이며 기품원 공식 조항이 아닙니다(공식 대조는 KDS STD-0005-1 원문 필요).' : ''}`;
 }
@@ -142,6 +153,7 @@ function readText(file) {
 }
 
 function renderFiles() {
+  syncDrawer();
   const label = { ok: '추출 완료', warn: '제한적', bad: '실패', run: '처리 중' };
   for (const kind of ['spec', 'company']) {
     const list = state.files.filter((f) => f.kind === kind);
@@ -236,6 +248,39 @@ async function runInspection() {
   } finally {
     state.inspecting = false; $('runBtn').disabled = false;
   }
+}
+
+/* ---------- 구두 안내 (브라우저 음성합성) ---------- */
+const TTS = 'speechSynthesis' in window;
+const voiceText = (c) => `${c.code}. ${c.title}`;
+function voiceStop() { if (TTS) speechSynthesis.cancel(); $('voiceStatus').textContent = '정지됨'; document.querySelectorAll('.voice-list li').forEach((l) => l.classList.remove('on')); }
+function voiceSpeak(list, i) {
+  if (i >= list.length) { $('voiceStatus').textContent = '재생 완료'; return; }
+  const lis = document.querySelectorAll('.voice-list li');
+  lis.forEach((l, k) => l.classList.toggle('on', k === i));
+  $('voiceStatus').textContent = `${i + 1} / ${list.length} 재생 중`;
+  const u = new SpeechSynthesisUtterance(voiceText(list[i]));
+  u.lang = 'ko-KR';
+  u.onend = () => { if (voiceSpeak.run === list) voiceSpeak(list, i + 1); };
+  u.onerror = () => { $('voiceStatus').textContent = '음성 재생 오류'; };
+  speechSynthesis.speak(u);
+}
+function openVoice() {
+  const list = critsOf(state.role);
+  $('voiceList').innerHTML = list.map((c, i) => `<li><button type="button" class="link" data-vi="${i}">${esc(voiceText(c))}</button></li>`).join('');
+  $('voiceStatus').textContent = TTS ? '재생 대기' : '이 브라우저는 음성 안내를 지원하지 않습니다.';
+  $('voicePanel').hidden = false;
+}
+function bindVoice() {
+  $('voiceBtn').addEventListener('click', openVoice);
+  $('voiceBtn2').addEventListener('click', openVoice);
+  $('voiceClose').addEventListener('click', () => { voiceStop(); $('voicePanel').hidden = true; });
+  $('voiceStop').addEventListener('click', () => { voiceSpeak.run = null; voiceStop(); });
+  $('voicePlayAll').addEventListener('click', () => { if (!TTS) return; speechSynthesis.cancel(); const l = critsOf(state.role); voiceSpeak.run = l; voiceSpeak(l, 0); });
+  $('voiceList').addEventListener('click', (e) => {
+    const b = e.target.closest('[data-vi]'); if (!b || !TTS) return;
+    speechSynthesis.cancel(); const l = critsOf(state.role); voiceSpeak.run = null; voiceSpeak.run = [l[Number(b.dataset.vi)]]; voiceSpeak(voiceSpeak.run, 0);
+  });
 }
 
 /* ---------- 로그인 / 기록 ---------- */
@@ -430,6 +475,6 @@ document.addEventListener('DOMContentLoaded', async () => {
   if (!$('roleGrid')) return;
   load();
   $('orgName').value = state.org; $('projectName').value = state.project;
-  renderRoles(); renderFiles(); syncRole(); bind(); goTo(1);
+  renderRoles(); renderFiles(); syncRole(); bind(); bindVoice(); goTo(1);
   try { state.user = (await api('GET', '/api/me')).username; showApp(); } catch (_) { showAuth(); }
 });
