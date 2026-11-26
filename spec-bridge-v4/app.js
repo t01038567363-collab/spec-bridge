@@ -52,7 +52,7 @@ function load() {
 function goTo(n) {
   state.screen = n;
   for (let i = 1; i <= 4; i++) $(`screen${i}`).hidden = i !== n;
-  document.querySelectorAll('.steps button, .drw-menu button').forEach((b) => {
+  document.querySelectorAll('.steps button, .drw-menu button, .bottom-nav button[data-step]').forEach((b) => {
     const i = Number(b.dataset.step);
     b.classList.toggle('active', i === n);
     b.classList.toggle('done', i < n);
@@ -87,7 +87,7 @@ function syncRole() {
 /* ---------- step 1 ---------- */
 function renderRoles() {
   $('roleGrid').innerHTML = Object.entries(ROLES).map(([k, r]) =>
-    `<button type="button" class="company role ${k === state.role ? 'sel' : ''}" data-role="${k}"><strong class="big">${r.name}</strong><small>${esc(r.desc)}</small></button>`).join('');
+    `<button type="button" class="company role ${k === state.role ? 'sel' : ''}" data-role="${k}"><span class="ptag">${k === state.role ? '선택됨' : '프로파일'}</span><em class="pkind">${k === 'defense' ? '방산 · 국방규격' : '기업 · 공공조달'}</em><strong class="big">${r.name}용 (${k === 'defense' ? '국방 47항목' : '기업 21항목'})</strong><small>${esc(r.desc)}</small></button>`).join('');
 }
 
 /* ---------- step 2: files ---------- */
@@ -274,6 +274,7 @@ function openVoice() {
 function bindVoice() {
   $('voiceBtn').addEventListener('click', openVoice);
   $('voiceBtn2').addEventListener('click', openVoice);
+  $('voiceBtn3').addEventListener('click', openVoice);
   $('voiceClose').addEventListener('click', () => { voiceStop(); $('voicePanel').hidden = true; });
   $('voiceStop').addEventListener('click', () => { voiceSpeak.run = null; voiceStop(); });
   $('voicePlayAll').addEventListener('click', () => { if (!TTS) return; speechSynthesis.cancel(); const l = critsOf(state.role); voiceSpeak.run = l; voiceSpeak(l, 0); });
