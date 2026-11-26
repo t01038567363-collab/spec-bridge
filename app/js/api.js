@@ -19,7 +19,8 @@
       const d = await subtle.digest('SHA-256', new TextEncoder().encode(s));
       return 'sha256:' + Array.from(new Uint8Array(d)).map((b) => b.toString(16).padStart(2, '0')).join('');
     }
-    return 'cyrb53:' + weakHash(s); // crypto.subtle 없는 환경(비보안 컨텍스트) 폴백
+    if (hash.strict) throw new Error('crypto.subtle 사용 불가: 서버 모드에서는 약한 해시 폴백을 허용하지 않습니다.');
+    return 'cyrb53:' + weakHash(s); // crypto.subtle 없는 환경(비보안 컨텍스트) 폴백 — 브라우저 시연 전용
   }
   function weakHash(s) {
     let h1 = 0xdeadbeef, h2 = 0x41c6ce57;
@@ -32,6 +33,7 @@
 
   function create(opts) {
     opts = opts || {};
+    if (opts.strictHash) hash.strict = true;
     const now = opts.now || (() => Date.now());
     const sessions = new Map(), idem = new Map();
     const logs = [];
@@ -76,6 +78,7 @@
         if (!body || typeof body.standard_id !== 'string') return err(422, 'E-IN-01', 'standard_id가 필요합니다.', [{ field: 'standard_id', reason: 'required' }]);
         if (body.standard_id !== STANDARD.standard_id) return err(404, 'E-NF-02', '존재하지 않는 standard_id입니다.');
         if (body.scenario != null && !['company_a', 'blank'].includes(body.scenario)) return err(422, 'E-IN-01', 'scenario 값이 올바르지 않습니다.', [{ field: 'scenario', reason: 'allowed: company_a|blank' }]);
+        if (body.mode != null && !['demo', 'strict'].includes(body.mode)) return err(422, 'E-IN-01', 'mode는 demo|strict 입니다.', [{ field: 'mode', reason: 'allowed: demo|strict' }]);
         const key = h['Idempotency-Key'] || h['idempotency-key'];
         if (key && String(key).length > 64) return err(422, 'E-IN-01', 'Idempotency-Key는 64자 이하입니다.');
         const mk = async (s, status) => {
@@ -84,7 +87,7 @@
         };
         const kh = key ? await hash(String(key)) : null;
         if (key) { const sid = idem.get(kh); const ex = sid && sessions.get(sid); if (ex && now() <= ex.expires) return mk(ex, 200); }
-        const s = { id: 's_' + rnd(12), expires: now() + TTL_MS, answers: {}, revision: {}, state: 'CREATED', results: null, stale: false, drafts: [], calls: [] };
+        const s = { id: 's_' + rnd(12), expires: now() + TTL_MS, mode: body.mode || opts.mode || 'demo', answers: {}, revision: {}, state: 'CREATED', results: null, stale: false, drafts: [], calls: [] };
         if ((body.scenario || 'company_a') === 'company_a') { s.answers = JSON.parse(JSON.stringify(D.SAMPLE_ANSWERS)); for (const q of Object.keys(s.answers)) s.revision[q] = 1; s.state = 'ANSWERING'; }
         sessions.set(s.id, s);
         if (key) idem.set(kh, s.id);
@@ -120,7 +123,7 @@
 
       if (method === 'POST' && seg[2] === 'evaluate') {
         let r;
-        try { r = E.evaluateAll(D.QUESTIONS, s.answers, { mode: opts.mode || 'demo' }); } catch (e) { return err(500, 'E-SYS-01', '기준표 처리 중 오류가 발생했습니다.'); }
+        try { r = E.evaluateAll(D.QUESTIONS, s.answers, { mode: s.mode }); } catch (e) { return err(500, 'E-SYS-01', '기준표 처리 중 오류가 발생했습니다.'); }
         s.results = r; s.stale = false; s.state = 'EVALUATED'; s.drafts = [];
         return ok(200, { evaluated_at: iso(now()), summary: { '충족': r.summary.ok, '미흡': r.summary.bad, '확인 필요': r.summary.check }, results: r.results });
       }

@@ -17,7 +17,15 @@
 
   // 보조 방어선일 뿐이며 완전한 민감정보 탐지가 아니다.
   const SENSITIVE = ['군사비밀', '2급비밀', '3급비밀', '대외비', '부대명', '무기체계명'];
-  const hasSensitive = (t) => SENSITIVE.some((w) => String(t || '').includes(w));
+  const SENSITIVE_RE = [
+    /\d{6}\s*-\s*[1-4]\d{6}/, // 주민등록번호
+    /\b0\d{1,2}\s*-\s*\d{3,4}\s*-\s*\d{4}\b/, // 전화번호
+    /[\w.+-]+@[\w-]+\.[\w.-]+/, // 이메일
+    /\b\d{3}-\d{2}-\d{5}\b/, // 사업자등록번호
+    /(비밀번호|패스워드|password|passwd|api[_ -]?key|secret)\s*[:=]/i,
+    /(군사\s*(2|3)?급?\s*비밀|비밀\s*취급|secret\s*\/\/)/i,
+  ];
+  const hasSensitive = (t) => { const s = String(t || ''); return SENSITIVE.some((w) => s.includes(w)) || SENSITIVE_RE.some((r) => r.test(s)); };
 
   // ---------- 1) 수치 체크리스트 ----------
   function validateAnswer(q, a) {

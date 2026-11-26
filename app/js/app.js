@@ -12,13 +12,39 @@
   const names = ['기업 로그인', '파일 업로드', '규격 사전검사', '리포트'];
   const companyName = () => (S.company.id === 'custom' ? S.custom.name || '미입력 기업' : S.company.name);
   const projectName = () => (S.company.id === 'custom' ? S.custom.project || '사전 점검' : S.company.project);
+  const SERVER = location.protocol !== 'file:';
+
+  // 서버 모드: 같은 handle(method, path, {headers, body}) 계약을 fetch로 호출한다. file://로 열면 브라우저 내장 API(시연용)를 쓴다.
+  function makeApi() {
+    if (!SERVER) return SB_API.create({ mode: S.mode, llm: window.SB_LLM });
+    return {
+      STANDARD: { standard_id: 'KDS-0050-9000' },
+      async handle(method, p, req) {
+        req = req || {};
+        try {
+          const res = await fetch('/api' + p, {
+            method, credentials: 'same-origin',
+            headers: { 'X-Requested-With': 'spec-bridge', ...(req.body !== undefined ? { 'Content-Type': 'application/json' } : {}), ...(req.headers || {}) },
+            body: req.body !== undefined ? JSON.stringify(req.body) : undefined,
+          });
+          const text = await res.text();
+          let body = null;
+          try { body = text ? JSON.parse(text) : null; } catch (e) { body = text; }
+          if (res.status >= 400 && !(body && body.error)) body = { error: { code: 'E-SYS-01', message: '서버 응답 오류 (' + res.status + ')' } };
+          return { status: res.status, body };
+        } catch (e) {
+          return { status: 0, body: { error: { code: 'E-NET-01', message: '서버에 연결할 수 없습니다. node server.js 실행 여부를 확인하세요.' } } };
+        }
+      },
+    };
+  }
 
   function toast(msg) {
     const t = $('#toast'); t.textContent = msg; t.style.display = 'block';
     clearTimeout(toast.h); toast.h = setTimeout(() => (t.style.display = 'none'), 4000);
   }
   function banner() {
-    $('#banner').innerHTML = `⚠ 본 서비스는 <b>공식 인증·심사가 아닌 사전 점검 보조</b>입니다. 가상 데이터만 입력하세요(기밀·개인정보 금지). 데이터는 이 브라우저 메모리에만 있으며 서버로 전송·저장되지 않습니다. · 정책 모드: <b>${S.mode === 'demo' ? 'demo (원문 대조 전 시연 판정)' : 'strict (원문 대조 전 문항은 모두 확인 필요)'}</b>`;
+    $('#banner').innerHTML = `⚠ 본 서비스는 <b>공식 인증·심사가 아닌 사전 점검 보조</b>입니다. 가상 데이터만 입력하세요(기밀·개인정보 금지). 데이터는 ${SERVER ? '문서 12항목 검사는 이 브라우저 안에서만, 수치 10문항 입력은 검사 시 서버로 전송되어 판정 직후 삭제됩니다(서버 메모리·24시간 만료).' : '이 브라우저 메모리에만 있으며 서버로 전송·저장되지 않습니다(file:// 시연 모드).'} · 정책 모드: <b>${S.mode === 'demo' ? 'demo (원문 대조 전 시연 판정)' : 'strict (원문 대조 전 문항은 모두 확인 필요)'}</b>`;
   }
   function stepper() {
     $('#stepper').innerHTML = names.map((n, i) => `<button class="${S.step === i + 1 ? 'on' : ''}" data-s="${i + 1}">${i + 1}. ${n}</button>`).join('');
@@ -148,8 +174,9 @@
       $('#rstQ').onclick = () => { S.answers = {}; S.qErrors = {}; S.qEval = null; render(); };
       $('#runB').onclick = async () => {
         readB(); S.qErrors = {};
-        const api = SB_API.create({ mode: S.mode, llm: window.SB_LLM });
-        const c = await api.handle('POST', '/sessions', { body: { standard_id: api.STANDARD.standard_id, scenario: 'blank' } });
+        const api = makeApi();
+        const c = await api.handle('POST', '/sessions', { body: { standard_id: api.STANDARD.standard_id, scenario: 'blank', mode: S.mode } });
+        if (c.status !== 201 && c.status !== 200) return toast('세션 생성 실패: ' + c.body.error.code + ' ' + c.body.error.message);
         const h = { Authorization: 'Bearer ' + c.body.token }, sid = c.body.session_id;
         for (const q of QUESTIONS) {
           const r = await api.handle('PUT', `/sessions/${sid}/answers/${q.qid}`, { headers: h, body: ansOf(q) });
@@ -157,6 +184,7 @@
         }
         if (Object.keys(S.qErrors).length) { toast('입력 오류가 있는 문항을 수정하세요.'); await api.handle('DELETE', `/sessions/${sid}`, { headers: h }); return render(); }
         const ev = await api.handle('POST', `/sessions/${sid}/evaluate`, { headers: h });
+        if (ev.status !== 200) { await api.handle('DELETE', `/sessions/${sid}`, { headers: h }); return toast('평가 실패: ' + ev.body.error.code); }
         S.qEval = { summary: { total: 10, ok: ev.body.summary['충족'], bad: ev.body.summary['미흡'], check: ev.body.summary['확인 필요'] }, results: ev.body.results };
         const d = await api.handle('POST', `/sessions/${sid}/draft`, { headers: h, body: { mode: 'auto' } });
         S.ckDraft = d.status === 200 ? d.body : null;
