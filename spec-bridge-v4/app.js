@@ -81,6 +81,16 @@ function renderRoles() {
 }
 
 /* ---------- step 2: files ---------- */
+const SENSITIVE = [
+  [/\d{6}\s?-\s?[1-4]\d{6}/, '주민등록번호 형식'],
+  [/01[016789][-\s]?\d{3,4}[-\s]?\d{4}/, '휴대전화번호 형식'],
+  [/[\w.+-]+@[\w-]+\.[\w.-]+/, '이메일 주소'],
+  [/(군사\s?기밀|군사비밀|대외비|Ⅱ급\s?비밀|II급\s?비밀|Ⅲ급\s?비밀|III급\s?비밀|CONFIDENTIAL|SECRET|TOP SECRET)/i, '비밀·대외비 표시'],
+  [/(비밀번호|패스워드|password|api[_-]?key|secret[_-]?key)\s*[:=]/i, '비밀번호·키 표기'],
+  [/\b\d{3}-\d{2}-\d{5}\b/, '사업자등록번호 형식'],
+];
+function detectSensitive(text) { return SENSITIVE.filter(([re]) => re.test(text)).map(([, label]) => label); }
+
 async function addFiles(list, kind) {
   const files = Array.from(list);
   let ok = 0;
@@ -102,7 +112,11 @@ async function addFiles(list, kind) {
       } else {
         rec.status = 'warn'; rec.note = '이 형식은 텍스트를 추출할 수 없어 검사에서 제외됩니다. PDF(텍스트) 또는 TXT로 변환해 주세요.';
       }
-      if (rec.status === 'ok') ok++;
+      if (rec.status === 'ok') {
+        const hits = detectSensitive(rec.text);
+        if (hits.length) { rec.status = 'warn'; rec.note += ` · ⚠ 민감정보 의심: ${hits.join(', ')} — 해당 자료를 올리지 않는 것을 권장합니다(분석은 브라우저 안에서만 수행).`; toast(`민감정보 의심 항목 발견: ${hits.join(', ')}`, 'warn'); }
+        ok++;
+      }
     } catch (err) {
       console.error(err);
       rec.status = 'bad'; rec.note = `읽기 실패: ${err.message || err}`;
