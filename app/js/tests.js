@@ -154,6 +154,99 @@
     eq([txt.includes('원문 대조 전 시연 판정'), txt.includes('공식 심사를 대체하지 않는'), txt.includes('Q04')], [true, true, true]);
   });
 
+  /* ---- API 계층 (TRD §3, TC-09·11·13~15·19·22·26·27) ---- */
+  const API = SB_API;
+  const sess = async (o, scenario, key) => {
+    const r = await o.handle('POST', '/sessions', { body: { standard_id: 'KDS-0050-9000', scenario }, headers: key ? { 'Idempotency-Key': key } : {} });
+    return { r, sid: r.body && r.body.session_id, h: { Authorization: 'Bearer ' + (r.body && r.body.token) } };
+  };
+  t('API A1·A2·A10: 규격 1종, 문항 10건(기준값 미노출), 보안 고지 4항목', async () => {
+    const o = API.create();
+    eq((await o.handle('GET', '/standards')).body.standards.length, 1);
+    const q = (await o.handle('GET', '/standards/KDS-0050-9000/questions')).body.questions;
+    eq([q.length, 'criterion' in q[0], 'min' in q[0]], [10, false, false]);
+    eq((await o.handle('GET', '/notices')).body.notices.length, 4);
+    eq((await o.handle('GET', '/standards/NOPE/questions')).body.error.code, 'E-NF-02');
+  });
+  t('API TC-13 중복 세션: 같은 Idempotency-Key → 201 후 200, 같은 session_id, 새 토큰·이전 토큰 폐기', async () => {
+    const o = API.create();
+    const a = await sess(o, 'blank', 'k1'), b = await sess(o, 'blank', 'k1');
+    eq([a.r.status, b.r.status, a.sid === b.sid], [201, 200, true]);
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h })).status, 401);
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: b.h })).status, 200);
+  });
+  t('API TC-14·26 인증: 토큰 없음·1자 변경 → 401, 세션 저장소에 평문 토큰 없음', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`)).body.error.code, 'E-AUTH-01');
+    const bad = { Authorization: 'Bearer ' + a.r.body.token.slice(0, -1) + (a.r.body.token.endsWith('a') ? 'b' : 'a') };
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: bad })).status, 401);
+    eq(JSON.stringify([...o._sessions.values()]).includes(a.r.body.token), false);
+  });
+  t('API 시나리오 company_a: evaluate → 충족 6·미흡 2·확인 필요 2, A6 단건 조회', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    const ev = await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    eq(ev.body.summary, { '충족': 6, '미흡': 2, '확인 필요': 2 });
+    eq((await o.handle('GET', `/sessions/${a.sid}/results/Q04`, { headers: a.h })).body.status, '미흡');
+  });
+  t('API TC-09·11·22 입력 오류: 단위 → 422 E-IN-02, 없는 qid/sid → 404, 민감어 → E-IN-05, 저장 안 됨', async () => {
+    const o = API.create(); const a = await sess(o, 'blank');
+    const put = (qid, body) => o.handle('PUT', `/sessions/${a.sid}/answers/${qid}`, { headers: a.h, body });
+    const u = await put('Q05', { value: 35, unit: 'MPa' });
+    eq([u.status, u.body.error.code, u.body.error.details[0].field], [422, 'E-IN-02', 'unit']);
+    eq((await put('Q05', { value: 40, unit: 'HRC', note: '대외비 부대명' })).body.error.code, 'E-IN-05');
+    eq((await put('Q99', { value: 1 })).body.error.code, 'E-NF-02');
+    eq((await put('Q05', [])).body.error.code, 'E-IN-01');
+    eq((await o.handle('PUT', '/sessions/s_nope/answers/Q05', { headers: a.h, body: {} })).body.error.code, 'E-NF-01');
+    eq((await o.handle('PUT', `/sessions/${a.sid}/answers/Q05`, { headers: a.h, body: '{bad' })).body.error.code, 'E-REQ-01');
+    eq(o._sessions.get(a.sid).answers.Q05, undefined);
+  });
+  t('API TC-15·27 상태: 평가 전 draft/A6 → 409 E-STATE-01, 수정 후 재평가 없이 draft → E-STATE-02', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    const d = () => o.handle('POST', `/sessions/${a.sid}/draft`, { headers: a.h, body: { mode: 'template' } });
+    eq((await d()).body.error.code, 'E-STATE-01');
+    eq((await o.handle('GET', `/sessions/${a.sid}/results/Q01`, { headers: a.h })).body.error.code, 'E-STATE-01');
+    await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    const p = await o.handle('PUT', `/sessions/${a.sid}/answers/Q05`, { headers: a.h, body: { value: 40, unit: 'HRC', evidence: [{ id: 'E05', state: '보유', meta: {} }] } });
+    eq([p.body.revision, p.body.stale_results], [2, true]);
+    eq((await d()).body.error.code, 'E-STATE-02');
+    await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    eq((await d()).status, 200);
+  });
+  t('API draft: 템플릿 면책 포함, 같은 mode 재요청은 같은 draft_id, export md, format 오류 422', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    const d1 = await o.handle('POST', `/sessions/${a.sid}/draft`, { headers: a.h, body: { mode: 'template' } });
+    const d2 = await o.handle('POST', `/sessions/${a.sid}/draft`, { headers: a.h, body: { mode: 'template' } });
+    eq([d1.body.generation_mode, d1.body.draft_id === d2.body.draft_id, d1.body.disclaimer.includes('공식')], ['template', true, true]);
+    const ex = await o.handle('GET', `/sessions/${a.sid}/export?format=md`, { headers: a.h });
+    eq([ex.status, ex.contentType, ex.body.includes('Q04')], [200, 'text/markdown', true]);
+    eq((await o.handle('GET', `/sessions/${a.sid}/export?format=pdf`, { headers: a.h })).body.error.code, 'E-IN-01');
+  });
+  t('API draft: LLM 타임아웃 → 템플릿 폴백 LLM_TIMEOUT, 25 s 초과 → 504 E-SYS-08', async () => {
+    const o = API.create({ llm: () => new Promise(() => {}) }); const a = await sess(o, 'company_a');
+    await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h });
+    const slow = API.create({ llm: () => new Promise(() => {}), draftTimeoutMs: 10 }); const b = await sess(slow, 'company_a');
+    await slow.handle('POST', `/sessions/${b.sid}/evaluate`, { headers: b.h });
+    const r = await slow.handle('POST', `/sessions/${b.sid}/draft`, { headers: b.h, body: { mode: 'auto' } });
+    eq([r.status, r.body.error.code], [504, 'E-SYS-08']);
+  });
+  t('API TC-19 삭제: 204 → 조회 404 E-NF-01 → 재삭제 204 (멱등)', async () => {
+    const o = API.create(); const a = await sess(o, 'company_a');
+    eq((await o.handle('DELETE', `/sessions/${a.sid}`, { headers: a.h })).status, 204);
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h })).body.error.code, 'E-NF-01');
+    eq((await o.handle('DELETE', `/sessions/${a.sid}`, { headers: a.h })).status, 204);
+  });
+  t('API 만료: TTL 24시간 경과 후 404 E-NF-01', async () => {
+    let tm = 1000; const o = API.create({ now: () => tm }); const a = await sess(o, 'company_a');
+    tm += 24 * 3600 * 1000 + 1;
+    eq((await o.handle('POST', `/sessions/${a.sid}/evaluate`, { headers: a.h })).body.error.code, 'E-NF-01');
+  });
+  t('API 로그: 오류 코드·qid만 기록, 입력값·비고 미기록', async () => {
+    const o = API.create(); const a = await sess(o, 'blank');
+    await o.handle('PUT', `/sessions/${a.sid}/answers/Q05`, { headers: a.h, body: { value: 40, unit: 'HRC', note: '대외비 부대명' } });
+    eq(o._logs.length > 0 && JSON.stringify(o._logs).includes('부대명'), false);
+  });
+
   window.__SB_TESTS = async function () {
     const out = [];
     for (const c of cases) {
