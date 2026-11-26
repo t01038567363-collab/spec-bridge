@@ -148,10 +148,20 @@
       $('#rstQ').onclick = () => { S.answers = {}; S.qErrors = {}; S.qEval = null; render(); };
       $('#runB').onclick = async () => {
         readB(); S.qErrors = {};
-        for (const q of QUESTIONS) { const v = E.validateAnswer(q, ansOf(q)); if (!v.ok) S.qErrors[q.qid] = v.errors; }
-        if (Object.keys(S.qErrors).length) { toast('입력 오류가 있는 문항을 수정하세요.'); return render(); }
-        S.qEval = E.evaluateAll(QUESTIONS, S.answers, { mode: S.mode });
-        S.ckDraft = await E.generateChecklistDraft(S.qEval.results);
+        const api = SB_API.create({ mode: S.mode });
+        const c = await api.handle('POST', '/sessions', { body: { standard_id: api.STANDARD.standard_id, scenario: 'blank' } });
+        const h = { Authorization: 'Bearer ' + c.body.token }, sid = c.body.session_id;
+        for (const q of QUESTIONS) {
+          const r = await api.handle('PUT', `/sessions/${sid}/answers/${q.qid}`, { headers: h, body: ansOf(q) });
+          if (r.status !== 200) S.qErrors[q.qid] = [r.body.error.code];
+        }
+        if (Object.keys(S.qErrors).length) { toast('입력 오류가 있는 문항을 수정하세요.'); await api.handle('DELETE', `/sessions/${sid}`, { headers: h }); return render(); }
+        const ev = await api.handle('POST', `/sessions/${sid}/evaluate`, { headers: h });
+        S.qEval = { summary: { total: 10, ok: ev.body.summary['충족'], bad: ev.body.summary['미흡'], check: ev.body.summary['확인 필요'] }, results: ev.body.results };
+        const d = await api.handle('POST', `/sessions/${sid}/draft`, { headers: h, body: { mode: 'auto' } });
+        S.ckDraft = d.status === 200 ? d.body : null;
+        if (!S.ckDraft) toast('초안 생성 실패: ' + d.body.error.code);
+        await api.handle('DELETE', `/sessions/${sid}`, { headers: h }); // 처리 후 세션 즉시 삭제
         toast(`판정 완료: 충족 ${S.qEval.summary.ok} · 미흡 ${S.qEval.summary.bad} · 확인 필요 ${S.qEval.summary.check}`);
         render();
       };
